@@ -1,0 +1,27 @@
+```{r}
+source("Rscripts/utils.R")
+```
+
+```{r}
+joint_peaks = read_bed("Tables/joint.peaks.bed")
+track = read_bed("../FIREv2.0/results/GM12878/FDR-peaks/FDR.track.bed.gz")
+track_ont = read_bed("FIRE/results/ONT_heuristic_full/FDR-peaks/FDR.track.bed.gz")
+
+track_data = bind_rows(
+    list(
+        PacBio=track,
+        ONT=track_ont
+    ),
+    .id="platform"
+) %>%
+    group_by(platform) 
+
+track_data
+```
+
+```{r}
+
+joint_peaks %>%
+    bed_map
+
+```
