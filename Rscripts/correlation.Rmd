@@ -3,25 +3,82 @@ source("Rscripts/utils.R")
 ```
 
 ```{r}
-joint_peaks = read_bed("Tables/joint.peaks.bed")
-track = read_bed("../FIREv2.0/results/GM12878/FDR-peaks/FDR.track.bed.gz")
-track_ont = read_bed("FIRE/results/ONT_heuristic_full/FDR-peaks/FDR.track.bed.gz")
+if(F){
+    track = my_read_bed("../FIREv2.0/results/GM12878/FDR-peaks/FDR.track.bed.gz")
+    head(track)
+    track_ont = my_read_bed("FIRE/results/ONT_heuristic_full/FDR-peaks/FDR.track.bed.gz")
 
-track_data = bind_rows(
-    list(
-        PacBio=track,
-        ONT=track_ont
-    ),
-    .id="platform"
-) %>%
-    group_by(platform) 
+    track_data = bind_rows(
+        list(
+            PacBio=track,
+            ONT=track_ont
+        ),
+        .id="platform"
+    ) %>%
+        group_by(platform) 
 
-track_data
+    track_data
+    con <- pipe("pigz -p8 > Rdata/track-data.Rdata", "wb")
+    save(
+        track_data,
+        file = con
+    ); close(con)
+}
+```
+
+```{r}
+load(file="Rdata/track-data.Rdata")
+```
+
+
+```{r}
+joint_peaks =  my_read_bed("Tables/joint.peaks.bed") %>%
+    #head(2) %>%
+    expand_grid(platform=c("PacBio", "ONT")) %>%
+    group_by(platform) %>%
+    bed_map(track_data,
+        fire_score=max(score)[1],
+        fire_coverage=fire_coverage[which.max(score)[1]],
+        coverage=coverage[which.max(score)[1]],
+    ) %>%
+    mutate(
+        percent_actuation = 100 * fire_coverage / coverage
+    )
+
+head(joint_peaks)
+
+joint_peaks_wide = joint_peaks %>%
+    pivot_wider(
+        id_cols=c(chrom, start, end),
+        names_from=platform,
+        values_from=c(fire_score, fire_coverage, coverage, percent_actuation)
+    ) 
+head(joint_peaks_wide)
 ```
 
 ```{r}
 
-joint_peaks %>%
-    bed_map
+joint_peaks_wide %>%
+    ggplot(aes(x=fire_score_PacBio, y=fire_score_ONT)) +
+    geom_hex(bins=100) + scale_fill_distiller("", palette = "Spectral", trans="log10") +
+    stat_cor(method="pearson") +
+    geom_abline(aes(intercept=0, slope=1), linetype="dashed")+
+    scale_x_continuous("PacBio FIRE score") +
+    scale_y_continuous("ONT FIRE score") +
+    my_grid() +
+    theme()
+my_ggsave("Figures/fire-score-correlation.pdf", height=4, width=4)
+
+
+joint_peaks_wide %>%
+    ggplot(aes(x=percent_actuation_PacBio, y=percent_actuation_ONT)) +
+    geom_hex(bins=100) + scale_fill_distiller("", palette = "Spectral", trans="log10") +
+    stat_cor(method="pearson") +
+    geom_abline(aes(intercept=0, slope=1), linetype="dashed")+
+    scale_x_continuous("PacBio percent actuation") +
+    scale_y_continuous("ONT percent actuation") +
+    my_grid() +
+    theme()
+my_ggsave("Figures/percent-actuation-correlation.pdf", height=4, width=4)
 
 ```
