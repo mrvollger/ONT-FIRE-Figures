@@ -4,18 +4,18 @@ source("Rscripts/utils.R")
 
 ```{r}
 if(F){
-    track = my_read_bed("../FIREv2.0/results/GM12878/FDR-peaks/FDR.track.bed.gz")
-    head(track)
-    track_ont = my_read_bed("FIRE/results/ONT_heuristic_full/FDR-peaks/FDR.track.bed.gz")
-
     track_data = bind_rows(
         list(
-            PacBio=track,
-            ONT=track_ont
+            PacBio=my_read_bed("../FIREv2.0/results/GM12878/FDR-peaks/FDR.track.bed.gz"),
+            ONT=my_read_bed("FIRE/results/ONT_modkit/FDR-peaks/FDR.track.bed.gz"),
+            ONT_plus=my_read_bed("FIRE/results/ONT_plus/FDR-peaks/FDR.track.bed.gz"),
+            ONT_minus=my_read_bed("FIRE/results/ONT_minus/FDR-peaks/FDR.track.bed.gz")
         ),
         .id="platform"
     ) %>%
-        group_by(platform) 
+    group_by(platform) %>%
+    filter(score > 0)
+    
 
     track_data
     con <- pipe("pigz -p8 > Rdata/track-data.Rdata", "wb")
@@ -23,26 +23,31 @@ if(F){
         track_data,
         file = con
     ); close(con)
+}else{
+    load(file="Rdata/track-data.Rdata")
 }
-```
-
-```{r}
-load(file="Rdata/track-data.Rdata")
 ```
 
 
 ```{r}
 joint_peaks =  my_read_bed("Tables/joint.peaks.bed") %>%
     #head(2) %>%
-    expand_grid(platform=c("PacBio", "ONT")) %>%
+    expand_grid(platform=unique(track_data$platform)) %>%
     group_by(platform) %>%
     bed_map(track_data,
         fire_score=max(score)[1],
         fire_coverage=fire_coverage[which.max(score)[1]],
         coverage=coverage[which.max(score)[1]],
+        fire_coverage_H1=fire_coverage_H1[which.max(score)[1]],
+        coverage_H1=coverage_H1[which.max(score)[1]],
+        fire_coverage_H2=fire_coverage_H2[which.max(score)[1]],
+        coverage_H2=coverage_H2[which.max(score)[1]],
     ) %>%
+    replace(is.na(.), 0) %>%
     mutate(
-        percent_actuation = 100 * fire_coverage / coverage
+        percent_actuation = 100 * fire_coverage / coverage,
+        percent_actuation_H1 = 100 * fire_coverage_H1 / coverage_H1,
+        percent_actuation_H2 = 100 * fire_coverage_H2 / coverage_H2,
     )
 
 head(joint_peaks)
@@ -51,34 +56,134 @@ joint_peaks_wide = joint_peaks %>%
     pivot_wider(
         id_cols=c(chrom, start, end),
         names_from=platform,
-        values_from=c(fire_score, fire_coverage, coverage, percent_actuation)
+        values_from=c(
+            fire_score, 
+            fire_coverage, 
+            coverage, 
+            percent_actuation, 
+            percent_actuation_H1, 
+            percent_actuation_H2,
+            coverage_H1,
+            coverage_H2
+        )
     ) 
 head(joint_peaks_wide)
 ```
 
 ```{r}
-
 joint_peaks_wide %>%
     ggplot(aes(x=fire_score_PacBio, y=fire_score_ONT)) +
     geom_hex(bins=100) + scale_fill_distiller("", palette = "Spectral", trans="log10") +
-    stat_cor(method="pearson") +
+    stat_cor(method="pearson", size=2.5) +
     geom_abline(aes(intercept=0, slope=1), linetype="dashed")+
     scale_x_continuous("PacBio FIRE score") +
     scale_y_continuous("ONT FIRE score") +
     my_grid() +
+    coord_fixed() +
     theme()
-my_ggsave("Figures/fire-score-correlation.pdf", height=4, width=4)
+my_ggsave("Figures/fire-score-correlation.pdf", height=3, width=4)
+```
 
-
+```{r}
 joint_peaks_wide %>%
+    #filter(percent_actuation_ONT + percent_actuation_PacBio > 15) %>%
     ggplot(aes(x=percent_actuation_PacBio, y=percent_actuation_ONT)) +
     geom_hex(bins=100) + scale_fill_distiller("", palette = "Spectral", trans="log10") +
-    stat_cor(method="pearson") +
+    #geom_xsidehistogram(bins=100) +
+    #geom_ysidehistogram(bins=100) +
+    stat_cor(method="pearson", size=2.5) +
     geom_abline(aes(intercept=0, slope=1), linetype="dashed")+
+    #stat_regline_equation(label.y=90) + geom_smooth(method="lm", se=F, color="darkred") +
     scale_x_continuous("PacBio percent actuation") +
     scale_y_continuous("ONT percent actuation") +
     my_grid() +
+    coord_fixed() +
     theme()
-my_ggsave("Figures/percent-actuation-correlation.pdf", height=4, width=4)
+my_ggsave("Figures/percent-actuation-correlation.pdf", height=3, width=4)
+```
 
+
+```{r}
+median(joint_peaks_wide$percent_actuation_PacBio - joint_peaks_wide$percent_actuation_ONT, na.rm=T)
+
+joint_peaks_wide %>%
+    filter(percent_actuation_PacBio>0) %>%
+    mutate(
+        group = cut(percent_actuation_PacBio, breaks=seq(0,100,20)),
+        peak_size_group = cut(end-start, breaks=c(0,200,300, Inf)),
+        diff = percent_actuation_PacBio - percent_actuation_ONT,
+    ) %>%
+    filter(!is.na(diff)) %>%
+    ggplot(aes(x=diff)) +
+    geom_histogram(binwidth=0.5) +
+    geom_vline(xintercept=0, linetype="dashed", color="darkred", size=0.5) +
+    geom_text(
+        data = . %>% group_by(group,peak_size_group) %>% dplyr::summarise(lab = median(diff, na.rm=T)),
+        aes(label=comma(round(lab,2)), y=0, x=lab),
+        size=2,
+        vjust=0,
+    ) +
+    scale_x_continuous(
+        "Difference between PacBio % actuation and ONT % actuation",
+        limits=c(-50,50),
+        breaks=seq(-50,50,10)  
+    ) +
+    facet_grid(group~peak_size_group, scales="free_y") +
+    scale_y_continuous("Count", label=comma) +
+    my_grid() +
+    theme()
+
+my_ggsave("Figures/percent-actuation-diff.pdf", height=3, width=4)
+```
+
+
+
+```{r}
+min_cov = 20
+joint_peaks_wide %>% 
+    mutate(
+        hap_diff = abs(percent_actuation_H1_ONT - percent_actuation_H2_ONT),
+        plus_minus_diff = abs(percent_actuation_ONT_plus - percent_actuation_ONT_minus)
+    ) %>%
+    select(
+        chrom, start, end, hap_diff, plus_minus_diff,
+        coverage_ONT_plus, coverage_ONT_minus, 
+        coverage_H1_ONT, coverage_H2_ONT
+    ) %>%
+    pivot_longer(
+        cols = c(hap_diff, plus_minus_diff), 
+        names_to= 'type', values_to= 'value'
+        #values_from=c(hap_diff, plus_minus_diff),
+    ) %>%
+    filter(
+        (type=="hap_diff" & (coverage_H1_ONT > min_cov & coverage_H2_ONT > min_cov)) |
+        (type=="plus_minus_diff" & (coverage_ONT_plus > min_cov & coverage_ONT_minus > min_cov))
+    ) %>%
+    ggplot(aes(x=value, color=type)) +
+    geom_label_repel(
+        data = . %>% group_by(type) %>% dplyr::summarise(median=median(value, na.rm=T)),
+        aes(label=comma(round(median,2)), y=0, x=median),
+        direction="y",
+        min.segment.length=0,
+        size=2.5,
+    ) +
+    stat_bin(
+        aes(y=..density..),
+        geom="step", position="identity", bins=150, alpha=0.65, pad=T
+    ) +
+    scale_x_continuous(
+        "Absolute difference in percent actuation",
+        limits=c(NA,30),
+    ) +
+    scale_y_continuous("Density", label=comma) +
+    scale_color_manual(
+        "",
+        labels=c("Difference between haplotypes", "Difference between strands"),
+        values=c("hap_diff"="darkblue", "plus_minus_diff"="darkred")
+    ) +
+    my_grid()+
+    theme(
+        legend.position="top"
+    )
+my_ggsave("Figures/strand-vs-hap-diff.pdf", height=3, width=3)
 ```

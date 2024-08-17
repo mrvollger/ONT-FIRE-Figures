@@ -1,0 +1,224 @@
+```{r}
+source("Rscripts/utils.R")
+```
+
+```{r}
+f = "sequence-stats-and-quality/best/PacBio.FiberSeq.PS00675.per_aln_stats.csv.gz"
+f2 = "sequence-stats-and-quality/best/PacBio.normal.PS00677.per_aln_stats.csv.gz"
+f3 = "sequence-stats-and-quality/best/ONT.normal.PS00678.per_aln_stats.csv.gz"
+f4 = "sequence-stats-and-quality/best/ONT.FiberSeq.PS00676.per_aln_stats.csv.gz"
+all.best.df = bind_rows(list(
+        fread(f),
+        fread(f2),
+        fread(f3),
+        fread(f4)
+        )  
+    ) %>%
+    filter(
+        alignment_type=="primary"
+    ) 
+```
+
+```{r}
+colors = c(
+    PacBio.FiberSeq="red",
+    PacBio.normal="darkred",
+    ONT.normal="darkblue",
+    ONT.FiberSeq="blue"
+)
+
+best.df = all.best.df %>%
+    mutate(
+        errors_per_kbp = 1000 * (1 - concordance),
+        errors_per_kbp = case_when(
+            errors_per_kbp == 0 ~ 0.01,
+            TRUE ~ errors_per_kbp,
+        ),
+    ) %>%
+    filter(aligned_read_length/read_length > 0.9) %>%
+    group_by(name) %>%
+    arrange(read_length, .by_group=TRUE) %>%
+    mutate(read_rank = row_number() / n()) %>%
+    #filter(read_rank > 0.05, read_rank < 0.995) %>%
+    sample_n(1e6) %>%
+    separate(name, c("tech", "exp", "sample"), remove=F) %>%
+    mutate(name = gsub(".PS.*", "", name)) %>%
+    data.table
+best.df
+```
+
+```{r}
+z=best.df %>%
+    ggplot(
+        aes(x=errors_per_kbp, color=name)
+    ) +
+    #geom_histogram(bins=50) +
+    stat_bin(geom="step", position="identity", bins=100, alpha=0.65) +
+    geom_text(
+        data = . %>% group_by(tech, name) %>% dplyr::summarize(stat=median(errors_per_kbp)),
+        aes(x=stat, y=5000, label=comma(stat)),
+        size=2,
+    ) +
+    scale_x_continuous(trans="log10", label=comma) + annotation_logticks(side="b") + 
+    scale_color_manual("", values=colors) +
+    scale_y_continuous(label=comma) +
+    facet_col(~tech, scales="free_y") +
+    xlab("Errors per kbp of sequence read") +
+    #facet_col(~name) +
+    my_grid() +
+    theme(legend.position="top")
+my_ggsave("Figures/accuracy.pdf", height=3, width=4)
+```
+
+```{r}
+z=best.df %>%
+    filter(tech=="PacBio") %>%
+    mutate(
+        effective_coverage = case_when(
+            effective_coverage >= 10 ~ 10,
+            TRUE ~ effective_coverage,
+        )
+    ) %>%
+    ggplot(
+        aes(x=errors_per_kbp, color=name)
+    ) +
+    #geom_histogram(bins=50) +
+    stat_bin(geom="step", position="identity", bins=100, alpha=0.65) +
+    scale_x_continuous(trans="log10", label=comma) + annotation_logticks(side="b") + 
+    scale_color_manual("", values=colors) +
+    scale_y_continuous(label=comma) +
+    xlab("Errors per kbp of sequence read") +
+    facet_col(~effective_coverage, scales="free_y") +
+    my_grid() +
+    theme(legend.position="top")
+my_ggsave("Figures/accuracy-by-ccs.pdf", height=6, width=4)
+```
+
+
+#
+# Read lengths
+#
+```{r}
+# calculate the read N50
+n50.df = all.best.df %>%
+    select(name, read_length) %>%
+    dplyr::group_by(name) %>%
+    arrange(read_length) %>%
+    mutate(
+        cumsum = cumsum(as.numeric(read_length)),
+        total = sum(read_length),
+    ) %>%
+    filter(cumsum > total/2) %>%
+    group_by(name) %>%
+    filter(
+        read_length == min(read_length)
+    ) %>%
+    sample_n(1) %>%
+    separate(name, c("tech", "exp", "sample"), remove=F) %>%
+    mutate(
+        name = gsub(".PS.*", "", name),
+        N50 = read_length,
+    ) 
+n50.df
+```
+
+```{r}
+z=best.df %>%
+    filter(read_length > 1000) %>%
+    ggplot(
+        aes(x=read_length, color=name, weight=read_length)
+    ) +
+    stat_bin(geom="step", position="identity", bins=200, alpha=0.65, pad=T) +
+    # add N50 line
+    geom_vline(data=n50.df, 
+        aes(xintercept=N50, color=name),
+        linetype="dashed",
+        size=.25
+    ) +
+    geom_label_repel(
+        data=n50.df,
+        aes(x=N50, y=0, label=comma(N50), color=name),
+        size=2,
+        alpha=0.75,
+        min.segment.length=0,
+        direction="x",
+        nudge_y=1e6,
+    ) +
+    scale_x_continuous(trans="log10", label=comma) + annotation_logticks(side="b") + 
+    scale_color_manual("", values=colors) +
+    scale_y_continuous(label=comma) +
+    facet_col(~tech, scales="free_y") +
+    my_grid() +
+    xlab("Read length (bp)") +
+    ylab("bp of sequence read") +
+    theme(legend.position="top")
+my_ggsave("Figures/read-length.pdf", height=3, width=4)
+```
+
+
+```{r}
+z=best.df %>%
+    filter(read_length > 1000) %>%
+    ggplot(
+        aes(x=read_length, color=name)
+    ) +
+    stat_bin(geom="step", position="identity", bins=200, alpha=0.65, pad=T) +
+    scale_x_continuous(trans="log10", label=comma) + annotation_logticks(side="b") + 
+    scale_color_manual("", values=colors) +
+    scale_y_continuous(label=comma) +
+    facet_col(~tech, scales="free_y") +
+    my_grid() +
+    xlab("Read length (bp)") +
+    theme(legend.position="top")
+my_ggsave("Figures/read-length-unfair.pdf", height=3, width=4)
+```
+
+
+#
+# Coverages
+#
+
+```{r}
+x="name stat coverage
+ONT.FiberSeq mean 37.2593880671667
+ONT.FiberSeq median 36
+PacBio.FiberSeq mean 29.602980576008495
+PacBio.FiberSeq median 29
+ONT.FIRE mean 36.6062305989766
+ONT.FIRE median 35
+PacBio.FIRE mean 28.311815983343536
+PacBio.FIRE median 28
+"
+cov.df = fread(x) %>%
+    separate(name, c("tech", "exp"), remove=F)
+    
+cov.df.wide = cov.df %>%
+    select(-name) %>%
+    pivot_wider(names_from= exp , values_from=coverage) %>%
+    #pivot_wider(names_from=stat, values_from=coverage) %>%
+    data.table; cov.df.wide
+
+cov.df %>%
+    filter(stat=="median") %>%
+    ggplot(
+        aes(y=coverage, fill=exp, x=tech)
+    ) +
+    geom_bar(
+        stat="identity", position="dodge",
+        alpha=0.85
+    )+
+    geom_text(
+        aes(label=comma(coverage)),
+        position=position_dodge(width=0.9),
+        vjust=-0.25,
+        size=2,
+    ) +
+    scale_fill_manual("", 
+        values=c("darkgray", "darkred")
+    ) +
+    scale_y_continuous("Median coverage", label=comma) +
+    xlab("Technology") +
+    my_grid() +
+    theme(legend.position="top")
+my_ggsave("Figures/fire-coverage-reduction.pdf", height=3, width=2)
+```
