@@ -81,7 +81,7 @@ joint_peaks_wide %>%
     my_grid() +
     coord_fixed() +
     theme()
-my_ggsave("Figures/fire-score-correlation.pdf", height=3, width=4)
+my_ggsave("Figures/fire-score-correlation.pdf", height=2, width=3)
 ```
 
 ```{r}
@@ -99,7 +99,7 @@ joint_peaks_wide %>%
     my_grid() +
     coord_fixed() +
     theme()
-my_ggsave("Figures/percent-actuation-correlation.pdf", height=3, width=4)
+my_ggsave("Figures/percent-actuation-correlation.pdf", height=1.5, width=2)
 ```
 
 
@@ -185,5 +185,118 @@ joint_peaks_wide %>%
     theme(
         legend.position="top"
     )
-my_ggsave("Figures/strand-vs-hap-diff.pdf", height=3, width=3)
+my_ggsave("Figures/strand-vs-hap-diff.pdf", height=2, width=3)
+```
+
+# resolving power
+```{r}
+qc.df = bind_rows(list(
+        ONT=fread("FIRE/results/ONT_matched/tables/qc.tbl.gz"),
+        PacBio=fread("FIRE/results/PB_matched/tables/qc.tbl.gz")
+    ),
+    .id="platform"
+)
+qc.df
+
+rp.df = qc.df %>%
+    filter(statistic=="m6a_per_msp_size") %>%
+    separate(value, c("m6a_count", "msp_size", "is_FIRE" ), sep=",", convert = TRUE) %>%
+    filter(msp_size >= 10) %>%
+    mutate(
+        resolving_power = m6a_count / msp_size,
+        msp_bin = cut(msp_size, breaks=c(
+            #0,1,2,
+            9,25,50,75,100,150,200,250,300,Inf)),    
+    ) %>%
+    data.table()
+rp.df
+```
+
+```{r}
+colors = c(
+    PacBio="darkred",
+    ONT="darkblue"
+)
+
+z=rp.df %>%  
+    ggplot(aes(x=msp_bin, y=resolving_power, color=platform)) +
+    geom_violin(
+        aes(weight=count),
+    ) +
+    geom_label(
+        data = . %>% group_by(platform, msp_bin) %>% dplyr::summarize(median=median(resolving_power)),
+        aes(label=percent(round(median,3)), y=median, x=msp_bin),
+        direction="y",
+        min.segment.length=1000,
+        size=1.5,
+    ) +
+    xlab("MSP size") +
+    scale_y_continuous("Resolving power", label=percent) +
+    scale_color_manual("", values=colors) +
+    my_grid() +
+    theme(
+    )
+my_ggsave("Figures/resolving-power.pdf", height=2, width=4)
+```
+
+```{r}
+rp.df %>%
+    group_by(platform, is_FIRE) %>%
+    dplyr::summarize(
+        median=median(resolving_power),
+        count=sum(count)/1e6,
+        Mbp=sum(count*msp_size)/1e6
+    )
+
+z=rp.df %>%
+    filter(is_FIRE=="true") %>%
+    ggplot(aes(x=resolving_power)) +
+    geom_histogram(aes(weight=count, fill=platform), binwidth=0.01) +
+    geom_label_repel(
+        data = . %>% group_by(platform) %>% dplyr::summarize(median=median(resolving_power)),
+        aes(label=percent(round(median,3)), y=0, x=median),
+        direction="y",
+        min.segment.length=0,
+        alpha=0.9,
+        size=2,
+    ) +
+    scale_y_continuous("Count", label=comma) +
+    scale_x_continuous(
+        "Resolving power within FIREs\n(# m6A / FIRE size)",
+        limits=c(0,0.5),
+        label=percent
+    ) +
+    scale_fill_manual("", values=colors) +
+    facet_col(~platform, scales="free_y") +
+    my_grid() +
+    theme(
+        legend.position="none"
+    )
+my_ggsave("Figures/resolving-power-FIRE.pdf", height=2, width=3)
+```
+
+
+
+```{r}
+z=rp.df %>%
+    #filter(is_FIRE=="true") %>%
+    ggplot(aes(y=resolving_power, x=msp_size)) +
+    geom_hex(
+        aes(weight=count), 
+        bins=30
+    ) + scale_fill_distiller("", palette = "Spectral", trans="log10", label=comma) +
+    scale_x_continuous(
+        "MSP size", 
+        label=comma,
+        #limits=c(0,3000),
+        trans="log10"
+    ) +  annotation_logticks(side="b") +
+    scale_y_continuous(
+        "Resolving power within FIREs\n(# m6A / MSP size)",
+        limits=c(0,0.5),
+        label=percent
+    ) +
+    facet_grid(is_FIRE~platform) +
+    my_grid() 
+my_ggsave("Figures/resolving-power-by-FIRE-size.pdf", height=3, width=4)
 ```

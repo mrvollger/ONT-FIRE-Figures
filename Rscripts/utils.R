@@ -56,8 +56,9 @@ MODEL_COLORS = c(PacBio=Indigo,
 
 read_m6a = function(file, my_tag = "", min_ml = 200, nrows=Inf, ref=TRUE){
     tmp = fread(glue(file), nrows=nrows)  %>%
-        filter(en - st > 0.5 * fiber_length | (en == 0 & st == 0)) %>%
-        filter(ec > 3.9)
+        filter(en - st > 0.5 * fiber_length | (en == 0 & st == 0)) 
+        #%>%
+        #filter(ec > 3.9)
     if ("sam_flag" %in% colnames(tmp)){
         print("filtering by sam flag")
         tmp = tmp %>% filter(sam_flag <= 16)

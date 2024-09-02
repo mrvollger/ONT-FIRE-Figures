@@ -53,21 +53,24 @@ z=best.df %>%
         aes(x=errors_per_kbp, color=name)
     ) +
     #geom_histogram(bins=50) +
-    stat_bin(geom="step", position="identity", bins=100, alpha=0.65) +
-    geom_text(
+    geom_label_repel(
         data = . %>% group_by(tech, name) %>% dplyr::summarize(stat=median(errors_per_kbp)),
-        aes(x=stat, y=5000, label=comma(stat)),
+        aes(x=stat, y=1000, label=comma(stat)),
+        #direction="y",
+        min.segment.length=0,
+        seed=1,
         size=2,
     ) +
+    stat_bin(geom="step", position="identity", bins=100, alpha=0.65) +
     scale_x_continuous(trans="log10", label=comma) + annotation_logticks(side="b") + 
     scale_color_manual("", values=colors) +
-    scale_y_continuous(label=comma) +
+    scale_y_continuous("Read count",label=comma) +
     facet_col(~tech, scales="free_y") +
     xlab("Errors per kbp of sequence read") +
     #facet_col(~name) +
-    my_grid() +
-    theme(legend.position="top")
-my_ggsave("Figures/accuracy.pdf", height=3, width=4)
+    my_grid()
+   #theme(legend.position="top")
+my_ggsave("Figures/accuracy.pdf", height=2, width=4)
 ```
 
 ```{r}
@@ -86,7 +89,7 @@ z=best.df %>%
     stat_bin(geom="step", position="identity", bins=100, alpha=0.65) +
     scale_x_continuous(trans="log10", label=comma) + annotation_logticks(side="b") + 
     scale_color_manual("", values=colors) +
-    scale_y_continuous(label=comma) +
+    scale_y_continuous("Read count", label=comma) +
     xlab("Errors per kbp of sequence read") +
     facet_col(~effective_coverage, scales="free_y") +
     my_grid() +
@@ -137,7 +140,7 @@ z=best.df %>%
     ) +
     geom_label_repel(
         data=n50.df,
-        aes(x=N50, y=0, label=comma(N50), color=name),
+        aes(x=N50, y=0, label=paste(comma(round(N50/1000,1)),"kbp"), color=name),
         size=2,
         alpha=0.75,
         min.segment.length=0,
@@ -150,9 +153,8 @@ z=best.df %>%
     facet_col(~tech, scales="free_y") +
     my_grid() +
     xlab("Read length (bp)") +
-    ylab("bp of sequence read") +
-    theme(legend.position="top")
-my_ggsave("Figures/read-length.pdf", height=3, width=4)
+    ylab("bp of sequence read") 
+my_ggsave("Figures/read-length.pdf", height=2, width=4)
 ```
 
 

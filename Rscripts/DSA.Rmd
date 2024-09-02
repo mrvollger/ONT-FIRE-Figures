@@ -1,0 +1,194 @@
+```{r}
+source("Rscripts/utils.R")
+my_colors = c(
+    "DSA"="red3",
+    "GRCh38"="grey30"
+)
+```
+
+```{r}
+fdr.df = bind_rows(list(
+    DSA_GM12878 = fread("FIRE/results/GM12878_DSA/FDR-peaks/FIRE.score.to.FDR.tbl"),
+    GRCh38_GM12878_H1 = fread("FIRE/results/GM12878_H1/FDR-peaks/FIRE.score.to.FDR.tbl"),
+    GRCh38_GM12878_H2 = fread("FIRE/results/GM12878_H2/FDR-peaks/FIRE.score.to.FDR.tbl"),
+    DSA_HG002 = fread("FIRE/results/HG002v1.1/FDR-peaks/FIRE.score.to.FDR.tbl"),
+    GRCh38_HG002_H1 = fread("FIRE/results/HG002_H1/FDR-peaks/FIRE.score.to.FDR.tbl"),
+    GRCh38_HG002_H2 = fread("FIRE/results/HG002_H2/FDR-peaks/FIRE.score.to.FDR.tbl")
+    ),
+    .id="id"
+) %>%
+    separate(id, c("reference", "cell_line", "hap"), sep="_", remove=FALSE)
+
+peaks.df = bind_rows(list(
+    DSA_GM12878 = fread("FIRE/results/GM12878_DSA/FDR-peaks/FDR-FIRE-peaks.bed.gz"),
+    GRCh38_GM12878_H1 = fread("FIRE/results/GM12878_H1/FDR-peaks/FDR-FIRE-peaks.bed.gz"),
+    GRCh38_GM12878_H2 = fread("FIRE/results/GM12878_H2/FDR-peaks/FDR-FIRE-peaks.bed.gz"),
+    DSA_HG002 = fread("FIRE/results/HG002v1.1/FDR-peaks/FDR-FIRE-peaks.bed.gz"),
+    GRCh38_HG002_H1 = fread("FIRE/results/HG002_H1/FDR-peaks/FDR-FIRE-peaks.bed.gz"),
+    GRCh38_HG002_H2 = fread("FIRE/results/HG002_H2/FDR-peaks/FDR-FIRE-peaks.bed.gz")
+    ),
+    .id="id"
+) %>%
+    separate(`#chrom`, c("chr", "chr_other"), sep="_", remove=FALSE) %>%
+    separate(id, c("reference", "cell_line", "hap"), sep="_", remove=FALSE)%>%
+    filter(chr != "chrM" & chr !="chrEBV") %>%
+    mutate(
+        chr = factor(chr, levels=unique(str_sort(chr, numeric = TRUE)))
+    )
+
+fdr.df %>%
+    group_by(id) %>%
+    arrange(threshold) %>%
+    filter(FDR <= 0.05) %>% 
+    mutate(
+        row_number = row_number(),
+    ) %>%
+    filter(row_number == 1) 
+```
+```{r}
+# read in coverage daa
+cov.df = bind_rows(list(
+    DSA_GM12878 = fread("FIRE/results/GM12878_DSA/coverage/GM12878_DSA.median.coverage.txt"),
+    GRCh38_GM12878_H1 = fread("FIRE/results/GM12878_H1/coverage/GM12878_H1.median.coverage.txt"),
+    GRCh38_GM12878_H2 = fread("FIRE/results/GM12878_H2/coverage/GM12878_H2.median.coverage.txt"),
+    DSA_HG002 = fread("FIRE/results/HG002v1.1/coverage/HG002v1.1.median.coverage.txt"),
+    GRCh38_HG002_H1 = fread("FIRE/results/HG002_H1/coverage/HG002_H1.median.coverage.txt"),
+    GRCh38_HG002_H2 = fread("FIRE/results/HG002_H2/coverage/HG002_H2.median.coverage.txt")),
+    .id="id"
+) %>%
+    rename(
+        coverage=V1
+    ) %>%
+    separate(id, c("reference", "cell_line", "hap"), sep="_", remove=FALSE)
+cov.df
+```
+
+
+```{r}
+fdr.df %>%
+    #filter(FDR<=0.75) %>%
+    filter( shuffled_peaks > 0) %>%
+    #filter(cell_line == "GM12878") %>%
+    filter(hap=="H1" | is.na(hap)) %>%
+    mutate(
+        shuffled_peaks = case_when(
+            reference == "DSA" ~ shuffled_peaks/2,
+            TRUE ~ shuffled_peaks
+        )
+    ) %>%
+    filter(shuffled_peaks > 10e3) %>%
+    ggplot(aes(x=threshold, y=shuffled_peaks, color=reference, group=id)) +
+    geom_point(size=0.1) + geom_line() +
+    #scale_x_continuous(trans="log10") +
+    scale_x_continuous(
+        "% FIRE threshold",
+        #limits=c(NA,35)
+    ) +
+    scale_y_continuous(
+        "Null distribution peaks (bp)\n(false positives)",
+        trans="log10",
+        label=comma
+    ) + annotation_logticks(side="l") +
+    scale_color_manual("", values=my_colors) +
+    my_grid() +
+    facet_row(~cell_line)
+my_ggsave("Figures/DSA-FDR-comparison.pdf", height=2, width=4)
+```
+
+
+
+```{r}
+peaks.df %>%
+    filter(grepl("^chr", chr)) %>%
+    ggplot(
+        aes(y=chr, fill=reference)
+    ) +
+    geom_bar(position="dodge", width=0.7) +
+    facet_grid(~cell_line, scales="free") +
+    scale_x_continuous(
+        "Number of FIRE peaks per chromosome",
+        labels=comma
+    ) +
+    scale_y_discrete("chromosome", limits=rev) +
+    scale_fill_manual("",
+        values=my_colors,
+    )+
+    my_grid()
+
+peaks.df %>%
+    group_by(reference, cell_line) %>%
+    summarise(
+        n_peaks = n()
+    )
+722585/362411
+333588/254436
+my_ggsave("Figures/DSA-peak-distribution.pdf", height=2, width=4)
+```
+
+# MHC peaks
+```{r}
+mhc_chr = "chr6"
+mhc_start = 28e6
+mhc_end = 34e6
+# redo the plot above for only the MHC region 
+mhc_df = peaks.df %>%
+    filter(chr == mhc_chr) %>%
+    filter(start >= mhc_start & end <= mhc_end)
+
+mhc_df %>%
+    ggplot(
+        aes(y=chr, fill=reference)
+    ) +
+    geom_bar(position="dodge", width=0.7) +
+    facet_grid(~cell_line, scales="free") +
+    scale_x_continuous(
+        "Number of FIRE peaks in the MHC region",
+        labels=comma
+    ) +
+    scale_y_discrete("", limits=rev, labels="MHC") +
+    scale_fill_manual("",
+        values=my_colors,
+    )+
+    my_grid()
+
+mhc_df %>%
+    group_by(reference, cell_line) %>%
+    summarise(
+        n_peaks = n()
+    )
+3441/2051
+1980/1574
+my_ggsave("Figures/DSA-MHC-peaks.pdf", height=1.5, width=3)
+```
+
+
+```{r}
+# make a ggplot of the percent actuation of peaks
+peaks.df %>%
+    mutate(
+        percent_actuated = fire_coverage/coverage
+    ) %>%
+    filter(cell_line == "GM12878") %>%
+    filter(percent_actuated<=1) %>%
+    ggplot(aes(x=percent_actuated, color=reference)) +
+    #geom_histogram(bins=50, position="dodge") +
+    stat_bin(geom="step", position="identity", bins=100, alpha=0.8, size=0.4, pad=T) +
+    scale_x_continuous(
+        "Percent actuated",
+        labels=percent_format()
+    ) +
+    scale_y_continuous(
+        "Number of FIRE peaks",
+        labels=comma
+    ) +
+    scale_color_manual(
+        "",
+        values=my_colors
+    ) +
+    my_grid() +
+    facet_row(~cell_line, scales="free", space="free")
+my_ggsave("Figures/DSA-actuation.pdf", height=2, width=4)
+```
+
+```{r}
+```

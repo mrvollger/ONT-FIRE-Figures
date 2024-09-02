@@ -1,0 +1,383 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, echo=FALSE}
+system("mkdir -p Figures")
+source('Rscripts/utils.R')
+```
+
+```{r}
+fiber.df = bind_rows(list(
+    PacBio = fread("FIRE/results/PB_matched/fire/PB_matched.fire.small.tbl.gz") %>% select(-rq),
+    ONT = fread("FIRE/results/ONT_matched/fire/ONT_matched.fire.small.tbl.gz") %>% select(-rq)
+    ),
+    .id="platform"
+) %>%
+    select(fiber, fiber_sequence, fiber_length, platform, sam_flag) %>%
+    filter(sam_flag==0 | sam_flag==16)
+fiber.df    
+
+PacBio=read_m6a("FIRE/results/PB_matched/fire/PB_matched.fire.small.tbl.gz", ref=F)
+ONT=read_m6a("FIRE/results/ONT_matched/fire/ONT_matched.fire.small.tbl.gz", ref=F) 
+auto.df=bind_rows(list(
+        PacBio=PacBio,
+        ONT=ONT
+    ),
+    .id="platform"
+) %>%
+    filter(type=="m6A") 
+table(auto.df$type)
+
+
+
+auto.merge.df = merge(fiber.df, auto.df, by=c("fiber", "platform", "fiber_length"))
+auto.merge.df %>% as_tibble
+```
+
+
+# work to only keep forward strand
+```{r}
+dists_df=auto.merge.df %>%
+    #sample_n(100) %>%
+    #rowwise() %>%
+    mutate(
+        is_A =  substring(fiber_sequence, start+1, start+1) == "A",
+        is_T =  substring(fiber_sequence, start+1, start+1) == "T",
+    ) %>%
+    filter(is_A | is_T) %>%
+    mutate(
+        is_ssPB = platform=="PacBio" & (
+            (is_T & sam_flag==16) |
+            (is_A & sam_flag==0))
+    ) %>%
+    select(-fiber_sequence)
+ss.df = copy(dists_df[is_ssPB==T])
+ss.df$platform = "Single strand PacBio"
+dists_df = rbind(dists_df, ss.df) %>%
+    mutate(
+        tag=platform
+    ) %>% 
+    data.table
+table(dists_df$tag)
+
+dists_df[
+    order(start),
+    c("dist", "count_per_fiber"):= list(start - lag(start), .N),
+    by=list(tag, type, fiber)
+]
+dists_df = dists_df[count_per_fiber/fiber_length > 0.01 & type == "m6A"]
+dists_df = dists_df[order(tag, type, fiber, start)] %>%
+    mutate(
+        tag = factor(tag, levels=c("ONT", "PacBio", "Single strand PacBio"))
+    ) %>%
+    data.table
+
+dists_df %>% group_by(tag) %>% summarise(n())
+dists_df %>% group_by(tag) %>% summarise(n()/sum(unique(fiber_length))*100)
+dists_df %>% as_tibble
+```
+
+
+
+```{r}
+LAG=250
+calls_per_group2 = dists_df %>% 
+    filter(type=="m6A") %>%
+    group_by(tag) %>% summarise(count=n())
+min_count2 = min(calls_per_group2$count)
+min_count2=20e5
+
+t = dists_df %>%
+    filter(type=="m6A") %>%
+    group_by(tag) %>%
+    mutate(row_num = seq(n())) %>%
+    filter(row_num < min_count2) %>%
+    group_by(tag, fiber) %>%
+    summarise(
+        count = n(),
+        index = list(seq(0, max(start)) %in% start)
+    )  %>%
+    filter(count > 100 | tag=="IPD") %>%
+    ungroup() %>%
+    group_by(tag) %>%
+    summarise(
+        auto = acf(as.numeric(unlist(index)), lag.max = LAG, plot = F)$acf,
+    ) %>%
+    group_by(tag) %>%
+    mutate(
+        lag = seq(n())
+    ) %>%
+    data.table()
+t %>% group_by(tag) %>% summarise(n())
+```
+
+```{r}
+t$change <- c(0, (t$auto[1:(length(t$auto)-1)] * t$auto[2:length(t$auto)]) <= 0)
+t[change==1]
+
+z=t %>%
+    filter(lag > 25) %>%
+    ggplot(aes(x=lag, y=auto, color=tag)) +
+    geom_hline(aes(yintercept=0), color="black",alpha=0.5, linetype="dashed") + 
+    geom_vline(data=NULL, aes(xintercept=147), linetype="dashed", color="black", alpha=0.5) +
+    geom_line() +
+    geom_label_repel( data = . %>% filter(change == 1),
+        aes(y=0, x = lag, label=lag),
+        min.segment.length = 0, # draw all line segments
+        nudge_x=5,
+        nudge_y=0.001,
+        show.legend = FALSE,
+        size=1.5,
+    ) +
+    scale_color_manual("", 
+        values=c("ONT"="darkblue", "PacBio"="darkred", "Single strand PacBio"="darkorange"),
+        labels=c("ONT", "PacBio", "Single strand\nPacBio")
+    ) +
+    scale_y_continuous("Autocorrelation between m6A events") + 
+    scale_x_continuous("Lag between m6A events") + 
+    my_grid() +
+    facet_row(~tag=="PacBio") +
+    theme(
+        #legend.position = "top",
+    )+
+    guides(color = guide_legend(nrow=3, override.aes = list(size = 1, shape="") ) )
+my_ggsave("Figures/autocorrelation-between-m6A.pdf", height=2, width=4)
+
+
+z=t %>%
+    filter(lag > 25) %>%
+    filter(tag != "PacBio") %>%
+    ggplot(aes(x=lag, y=auto, color=tag)) +
+    geom_hline(aes(yintercept=0), color="black",alpha=0.5, linetype="dashed") + 
+    geom_vline(data=NULL, aes(xintercept=147), linetype="dashed", color="black", alpha=0.5) +
+    geom_line() +
+    geom_label_repel( data = . %>% filter(change == 1),
+        aes(y=0, x = lag, label=lag),
+        min.segment.length = 0, # draw all line segments
+        nudge_x=5,
+        #nudge_y=0.001,
+        show.legend = FALSE,
+        size=1.5,
+    ) +
+    scale_color_manual("", 
+        values=c("ONT"="darkblue", "PacBio"="darkred", "Single strand PacBio"="darkorange"),
+    ) +
+    scale_y_continuous("Autocorrelation between m6A events") + 
+    scale_x_continuous("Lag between m6A events") + 
+    my_grid() +
+    theme(
+        #legend.position = "top",
+    )+
+    guides(color = guide_legend(nrow=3, override.aes = list(size = 1, shape="") ) )
+my_ggsave("Figures/autocorrelation-between-m6A-simple.pdf", height=2, width=3)
+```
+
+
+```{r}
+n = 2; 147*n + 60*(n-1)
+```
+
+
+
+# runtime 
+```{r}
+rt_df = fread("Tables/run-time-comparison.tsv") %>%
+    filter(type=="CPU")%>%
+    mutate(
+        label=paste(
+            comma(round(ipdSummary/fibertools)),
+            "",
+            #"\n",
+            #"Fibertools CPU hours: ",
+            #fibertools,
+            sep=""
+        )
+    )
+rt_df  %>%
+    ggplot(aes(x=Gbp, y=ipdSummary/fibertools))+
+    geom_point()+
+    geom_line()+
+    geom_text_repel(aes(label=label))+
+    scale_y_continuous(
+        "Fold increase in fibertools m6A calling",
+        label=comma,
+        limits=c(0,NA)
+    )+
+    scale_x_continuous("Gbp of HiFi data")+
+    theme_minimal_grid()
+#my_ggsave("Figures/run-time-comparison.pdf", height=6, width=8)
+```  
+
+
+```{r}
+rt_df  %>%
+    pivot_longer(cols=c("ipdSummary", "fibertools")) %>%
+    arrange(-value) %>%
+    mutate(
+        #sample=factor(sample, levels=rev(unique(sample)))
+    ) %>%
+    mutate(
+        label = case_when(
+            value > 1000 ~ comma(10*round(value/10)),
+            TRUE ~ comma(round(value,2))
+        )
+    ) %>%
+    ggplot(aes(x=sample, y=value, color=name))+
+    geom_text_repel(
+        aes(label=label),
+        color="black", size=3.5,
+        nudge_y = -0.2,
+        min.segment.length=0,
+        direction="y",
+    )+
+    geom_point(size=3)+
+    scale_y_continuous(
+        "Runtime for m6A calling\n(CPU hours)",
+        label=comma,
+        trans="log10",
+        #limits=c(0,NA)
+    )+
+    annotation_logticks(side="l") +
+    scale_x_discrete(
+        "SMRTcell",
+        guide = guide_axis(n.dodge = 2), 
+    )+
+    scale_color_manual(
+        "",
+        values=c(fibertools="purple", "ipdSummary"=MODEL_COLORS["GMM"][[1]]),
+        label=c("fibertools", "Subread pipeline")
+    )+
+    theme_minimal_grid() +
+    guides(color = guide_legend(override.aes = list(size = 3)))+
+    theme(
+        legend.position="top",
+        axis.text.x=element_text(size=9)
+    )
+my_ggsave("Figures/run-time-comparison.pdf", height=5, width=8.5)
+```
+
+
+```{r}
+library(ggbeeswarm)
+rt_df  %>%
+    pivot_longer(cols=c("ipdSummary", "fibertools")) %>%
+    arrange(-value) %>%
+    mutate(
+        #sample=factor(sample, levels=rev(unique(sample)))
+    ) %>%
+    mutate(
+        label = case_when(
+            value > 1000 ~ comma(10*round(value/10)),
+            TRUE ~ comma(round(value,2))
+        )
+    ) %>%
+    ggplot(aes(x=name, y=value, color=name))+
+    geom_violin()+
+    #geom_jitter(aes(x=name), size=1.5, alpha=0.5)+
+    geom_quasirandom(size=1.5, alpha=0.5)+
+    scale_y_continuous(
+        "Runtime for m6A calling\n(CPU hours)",
+        label=comma,
+        trans="log10",
+        #limits=c(0,NA)
+    )+
+    annotation_logticks(side="l") +
+    scale_x_discrete(
+        "",
+        #guide = guide_axis(n.dodge = 2), 
+    )+
+    scale_color_manual(
+        "",
+        values=c(fibertools="purple", "ipdSummary"=MODEL_COLORS["GMM"][[1]]),
+        label=c("fibertools", "Subread pipeline")
+    )+
+    theme_minimal_grid() +
+    #guides(color = guide_legend(override.aes = list(size = 3)))+
+    theme(
+        legend.position="none",
+    )
+my_ggsave("Figures/run-time-comparison.2.pdf", height=5, width=4)
+```
+```
+
+# FPR TPR precision recall figures
+```{r}
+sm="PS00075_1"
+sm="PS00109_1"
+tp_df = fread(glue("Tables/{sm}-ROC-curve-data.csv")) %>% filter(tag!="pb") 
+pr_df = fread(glue("Tables/{sm}-precision-recall.csv")) %>% filter(tag!="pb")
+auc = fread(glue("Tables/{sm}-area-under.csv")) %>% filter(tag!="pb") %>% filter(tag != "semi") 
+tp_df
+pr_df
+```
+
+```{r}
+
+pos_neg_ratio = 0.1287271203815602
+
+zs=0.4
+s = 0.75
+p1 = tp_df %>%
+    filter(tag != "semi") %>%
+    mutate(
+        #tag = factor(tag, levels=c("CNN", "XGBoost","ipdSumary"))
+    ) %>%
+    ggplot(aes(x=FPR, y=TPR, color=tag))+
+    geom_segment(data = NULL, aes(x=0, xend=1, y=0, yend=1), color="black", size=s/2, linetype="dashed") +
+    geom_line(size=s, alpha=0.75) +
+    facet_zoom(
+        xlim = c(0,0.025),
+        horizontal = FALSE,
+        zoom.size=zs
+    )+
+    scale_x_continuous("False positive rate")+
+    scale_y_continuous("True positive rate")+
+    scale_color_manual(
+        "Model",
+        values=c("purple", MODEL_COLORS["GMM"][[1]], "orange"),
+        labels=c("CNN", "ipdSummary", "XGBoost")
+    )+
+    guides(color = guide_legend(override.aes = list(size = 3) ) )+
+    theme_cowplot() +
+    theme(legend.position="top") + coord_equal()
+
+library(grid)
+# Create a text
+#grob <- grobTree(textGrob("Scatter plot", x=0.8,  y=0.2, hjust=0,
+#  gp=gpar(col="red", fontsize=13, fontface="italic")))
+#p1=p1+ annotation_custom(grob)
+tpr = copy(pr_df[recall == 1])
+tpr$precision = 0
+p2 = pr_df %>%
+    bind_rows(tpr) %>% 
+    filter(tag != "semi") %>%
+    ggplot(aes(x=precision, y=recall, color=tag))+
+    #geom_point(aes(x=0,y=0), color=NA) +
+    #geom_vline(aes(xintercept=0.9), linetype="dashed")+
+    #geom_hline(aes(yintercept=0.9), linetype="dashed")+
+    geom_hline(aes(yintercept=pos_neg_ratio), linetype="dashed")+
+    geom_line(size=s, alpha=0.75) +
+    facet_zoom(
+        #xy = (precision > 0.75) & (recall > 0.2),
+        #x = precision > 0.8,
+        xlim=c(0.8,1),
+        horizontal = FALSE,
+        zoom.size=zs
+    )+
+    scale_y_continuous("Recall")+
+    scale_color_manual(
+        "Model",
+        #values=c("red", "darkgray", "orange"),
+        values=c("purple", MODEL_COLORS["GMM"][[1]], "orange"),
+        labels=c("CNN", "ipdSummary", "XGBoost")
+    )+
+    theme_cowplot() +
+    theme(legend.position="none") + coord_equal()
+p1+p2
+my_ggsave("Figures/{sm}-roc-and-pr.pdf", height=5, width=8)
+print(auc)
+```
